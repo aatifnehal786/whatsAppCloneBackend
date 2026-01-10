@@ -5,11 +5,11 @@ const userSchema = new mongoose.Schema({
     phoneSuffix:{type:String,unique:false},
     userName:{type:String},
     email: {
-        type: String,
-        trim: true,
-        lowercase: true,
-        unique: true,
-     validate: {
+      type: String,
+      sparse: true,
+      trim: true,
+      lowercase: true,
+      validate: {
     validator: function (value) {
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
     },

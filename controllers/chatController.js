@@ -29,9 +29,9 @@ const sendMessage = async(req,res)=> {
             }
 
             imageOrvideoUrl = uploadFile?.secure_url;
-            if(file.mimetype.startwith('image')){
+            if(file.mimetype.startswith('image')){
                 contentType = "image"
-            }else if(file.mimetype.startwith('video')){
+            }else if(file.mimetype.startswith('video')){
                 contentType = "video"
             }else {
                 return response(res,400,'Unsupported type')
@@ -54,7 +54,7 @@ const sendMessage = async(req,res)=> {
 
         await message.save();
         if(message?.content) {
-            conversation.lastMessage = message?.id;
+            conversation.lastMessage = message?._id;
         }
        if (conversation) {
   conversation.unreadCounts = (conversation.unreadCounts ?? 0) + 1;

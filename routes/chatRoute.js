@@ -14,8 +14,8 @@ const router = express.Router();
 // protected routes
 
 router.post("/send-message",authmiddleWare,multerMiddleware,chatController.sendMessage);
-router.get("/conversations",authmiddleWare,chatController.getAllConversations);
-router.get('/conversations/:conversationId/messages',authmiddleWare,chatController.getMessages);
+router.get("/chats/conversations",authmiddleWare,chatController.getAllConversations);
+router.get('/chats/conversations/:conversationId/messages',authmiddleWare,chatController.getMessages);
 router.put("/markasread",authmiddleWare,chatController.markAsRead)
 router.delete("/delete-messages/:messageIds",authmiddleWare,chatController.deleteMessages)
 

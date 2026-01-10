@@ -56,7 +56,7 @@ const initializeSocket = (server)=> {
         })
 
 
-        // return online status of requirested user
+        // return online status of requested user
 
         socket.on("get_user_status",(requesteduserid,callback)=>{
             const isOnline = onlineUsers.has(requesteduserid)

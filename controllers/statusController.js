@@ -22,9 +22,9 @@ const createStatus = async (req, res) => {
             }
 
             mediaUrl = uploadFile?.secure_url;
-            if (file.mimetype.startwith('image')) {
+            if (file.mimetype.startswith('image')) {
                 finalContentType = "image"
-            } else if (file.mimetype.startwith('video')) {
+            } else if (file.mimetype.startswith('video')) {
                 finalContentType = "video"
             } else {
                 return response(res, 400, 'Unsupported type')
