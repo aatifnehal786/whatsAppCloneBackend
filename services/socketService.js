@@ -84,27 +84,25 @@ const initializeSocket = (server)=> {
 
         // message mark as read and notify user
 
-        socket.on("message_read",async({messageIds,userId})=>{
-            try {
-                await Message.updateMany(
-                    {_id:{$in:messageIds}},
-                    {$set:{messageStatus:'read'}}
-                )
+        socket.on("message_read", async ({ messageIds, senderId }) => {
+  try {
+    await Message.updateMany(
+      { _id: { $in: messageIds } },
+      { $set: { messageStatus: "read" } }
+    );
 
-                const senderSocketId = onlineUsers.get(senderId);
-                if(senderSocketId) {
-                    messageIds.forEach((messageId)=>{
-                        io.to(senderSocketId).emit("message_status_update",{
-                            messageId,
-                            messageStatus:'read'
-                        })
-                    })
-                }
-            } catch (error) {
-                console.error("Error updating message read status",error)
-                
-            }
-        })
+    const senderSocketId = onlineUsers.get(senderId);
+    if (senderSocketId) {
+      io.to(senderSocketId).emit("message_status_update", {
+        messageIds,
+        messageStatus: "read",
+      });
+    }
+  } catch (error) {
+    console.error("Error updating message read status", error);
+  }
+});
+
 
 
         // handle typing events and auto stop after 3 seconds

@@ -146,48 +146,49 @@ const getMessages = async(req,res)=> {
         return response(res,500,'Internal Server Error')
     }
 }
+const markAsRead = async (req, res) => {
+  const { messageIds } = req.body;
+  const userId = req.user.userid;
 
-const markAsRead = async(req,res)=> {
-    const {messageIds} = req.body;
+  try {
+    // 1. fetch messages (to get sender + conversation)
+    const messages = await Message.find({
+      _id: { $in: messageIds },
+      receiver: userId,
+    }).select("sender conversation");
 
-    const userId = req.user.userid;
-
-    try {
-        let messages = await Message.find({
-            _id:{$in:messageIds},
-            receiver:userId,
-        })
-
-        await Message.updateMany({
-            _id:{$in:messageIds},receiver:userId
-        },
-        {
-          $set:{messageStatus:'read'}  
-        }
-    )
-
-
-    // notify sender
-    if(req.io && req.socketUserMap) {
-        for(const message of messages) {
-            const senderSocketId = req.socketUserMap.get(message.sender.toString());
-            if(senderSocketId) {
-                const updatedMessage = {
-                    _id:message._id,
-                    messageStatus: 'read',
-                }
-
-                req.io.to(senderSocketId).emit("message_read",updatedMessage);
-                await message.save();
-            }
-        }
+    if (!messages.length) {
+      return response(res, 200, "No messages to mark");
     }
-    return response(res,200,'Messages Mark as read',messages)
-    } catch (error) {
-        console.error(error);
-        return response(res,500,'Internal Server Error')
+
+    // 2. mark as read
+    await Message.updateMany(
+      { _id: { $in: messageIds }, receiver: userId },
+      { $set: { messageStatus: "read" } }
+    );
+
+    const conversationId = messages[0].conversation.toString();
+    const senderId = messages[0].sender.toString();
+
+    // 3. notify sender via socket
+    if (req.io && req.socketUserMap) {
+      const senderSocketId = req.socketUserMap.get(senderId);
+
+      if (senderSocketId) {
+        req.io.to(senderSocketId).emit("message_read", {
+          conversationId,
+          messageIds,
+        });
+      }
     }
-}
+
+    return response(res, 200, "Messages marked as read");
+  } catch (error) {
+    console.error("markAsRead error", error);
+    return response(res, 500, "Internal Server Error");
+  }
+};
+
 
 const deleteMessages = async(req,res)=> {
 

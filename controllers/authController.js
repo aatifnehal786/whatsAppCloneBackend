@@ -119,36 +119,48 @@ const verifyOtp = async(req,res)=>{
 
 
 // Update profile
-
-const updateProfile = async(req,res)=>{
-
-    const {username,agreed,about} = req.body;
+const updateProfile = async (req, res) => {
+    const { userName, agreed, about } = req.body;
     const userId = req.user.userid;
-    console.log(userId)
 
     try {
         const user = await User.findById(userId);
-        const file = req.file;
-        if(file) {
-            const uploadResult = await uploadFileToCloudinary(file);
-            console.log(uploadResult.secure_url);
+        if (!user) {
+            return response(res, 404, "User not found");
+        }
+
+        // profile picture
+        if (req.file) {
+            const uploadResult = await uploadFileToCloudinary(req.file);
             user.profilePicture = uploadResult.secure_url;
-        }else if(req.body.profilePicture) {
+        } else if (req.body.profilePicture) {
             user.profilePicture = req.body.profilePicture;
         }
 
-        if(username) user.userName = username;
-        if(agreed) user.agreed = agreed;
-        if(about) user.about = about;
-        await user.save()
+        // username
+        if (userName) {
+            user.userName = userName;
+        }
 
-        return response(res,200,'profile picture updated successfully',user);
+        // agreed (boolean-safe)
+        if (typeof agreed !== "undefined") {
+            user.agreed = agreed;
+        }
 
+        // about
+        if (about) {
+            user.about = about;
+        }
+
+        await user.save();
+
+        return response(res, 200, "Profile updated successfully", user);
     } catch (error) {
         console.error(error);
-        return response(res,500,'Internal Server Error')
+        return response(res, 500, "Internal Server Error");
     }
-}
+};
+
 
 
 // check if user is authorized or not
