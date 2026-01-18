@@ -1,221 +1,237 @@
-const { uploadFileToCloudinary } = require('../config/cloudinaryConfig');
-const Conversation = require('../models/Conversation');
-const Message = require('../models/Messages');
-const response = require('../utils/responseHandler')
+const Conversation = require("../models/Conversation");
+const Message = require("../models/Messages");
+const { uploadFileToCloudinary } = require("../config/cloudinaryConfig");
+const response = require("../utils/responseHandler");
 
+// Send a message (text/image/video)
+exports.sendMessage = async (req, res) => {
+  const { senderId, receiverId, content, messageStatus } = req.body;
+  const file = req.file;
+  try {
+    // Sort participants to maintain consistent conversation key
+    const participants = [senderId, receiverId].sort();
 
-const sendMessage = async(req,res)=> {
-    try {
-        const {senderId,receiverId,content,messageStatus} = req.body;
-        const file = req.file;
-        const participants = [senderId,receiverId].sort();
-        let conversation = await Conversation.findOne({
-            participants
-        })
+    
+    // Check if conversation already exits
+    let conversation = await Conversation.findOne({
+      participants: participants,
+    });
 
-        if(!conversation) {
-            conversation = new Conversation({participants})
-            await conversation.save();
-        }
-        let imageOrvideoUrl = null;
-        let contentType = null;
-
-        // handle file upload
-        if(file) {
-            const uploadFile = await uploadFileToCloudinary(file);
-
-            if(!uploadFile?.secure_url) {
-                return response(res,400,'Failed to upload media')
-            }
-
-            imageOrvideoUrl = uploadFile?.secure_url;
-            if(file.mimetype.startswith('image')){
-                contentType = "image"
-            }else if(file.mimetype.startswith('video')){
-                contentType = "video"
-            }else {
-                return response(res,400,'Unsupported type')
-            }
-        }else if(content?.trim()) {
-            contentType = "text"
-        }else{
-            return response(res,400,'Message Content is required')
-        }
-
-        const message = new Message({
-            conversation: conversation?._id,
-            sender: senderId,
-            receiver: receiverId,
-            imageOrvideoUrl,
-            content,
-            contentType,
-            messageStatus
-        })
-
-        await message.save();
-        if(message?.content) {
-            conversation.lastMessage = message?._id;
-        }
-       if (conversation) {
-  conversation.unreadCounts = (conversation.unreadCounts ?? 0) + 1;
-}
-
-        await conversation.save();
-
-        const populateMessage = await Message.findOne(message?._id)
-        .populate("sender","userName profilePicture ")
-        .populate("receiver","userName profilePicture ")
-
-        // emit socket event for realtime
-        if (req.io && req.socketUserMap) {
-           
-            const receiverSocketId = req.socketUserMap.get(receiverId);
-            if(receiverSocketId) {
-                req.io.to(receiverSocketId).emit("receive_message",populateMessage);
-                message.messageStatus = 'delivered';
-                await message.save();
-            }
-        }
-
-        return response(res,201,"Message send Successfully",populateMessage);
-    } catch (error) {
-        console.error(error);
-        return response(res,500,'Internal Server Error')
-    }
-}
-
-
-// get all conversation
-
-const getAllConversations = async (req,res)=> {
-
-    const userId = req.user.userid;
-    try {
-        let conversation = await Conversation.find({
-        participants:userId
-    }).populate("participants","userName profilePicture lastSeen isOnline").populate({
-        path:"lastMessage",
-        populate:{
-            path:"sender receiver",
-            select:"userName profilePicture"
-        }
-    }).sort({updatedAt:-1})
-
-    return response(res,200,'conversation get successfully',conversation)
-    } catch (error) {
-        console.error(error);
-        return response(res,500,'Internal Server Error')
+    // Create new conversation if not found
+    if (!conversation) {
+      conversation = new Conversation({
+        participants,
+        unreadCount: 0,
+      });
+      await conversation.save();
     }
 
-}
+    let imageOrVideoUrl = null;
+    let contentType = null;
 
-// get messages of specific user 
+    // Handle file upload (image or video)
+    if (file) {
+      const uploadedFile = await uploadFileToCloudinary(file);
 
-const getMessages = async(req,res)=> {
-    const {conversationId} = req.params;
-    const userId = req.user.userid;
+      if (!uploadedFile?.secure_url) {
+        return response(res, 400, "Failed to upload media");
+      }
 
-    try {
-        const conversation = await Conversation.findById(conversationId);
-        if(!conversation) {
-            return response(res,404,'Conversation not found')
-        }
+      imageOrVideoUrl = uploadedFile.secure_url;
 
-        if(!conversation.participants.includes(userId)) {
-            return response(res,400,'User Not authorized to view this conversation')
-        }
+      if (file.mimetype.startsWith("image")) {
+        contentType = "image";
+      } else if (file.mimetype.startsWith("video")) {
+        contentType = "video";
+      } else {
+        return response(res, 400, "Unsupported file type");
+      }
+    } else if (content?.trim()) {
+      contentType = "text";
+    } else {
+      return response(res, 400, "Message content is required");
+    }
 
-        const messages = await Message.find({conversation:conversationId})
-        .populate("sender","userName profilePicture ")
-        .populate("receiver","userName profilePicture ").sort("createdAt")
+    // Save message to DB
+    const message = new Message({
+      conversation: conversation._id,
+      sender: senderId,
+      receiver: receiverId,
+      content,
+      imageOrVideoUrl,
+      contentType,
+      messageStatus,
+    });
 
-        await Message.updateMany({
-            conversation:conversationId,
-            receiver:userId,
-            messageStatus:{$in:['send','delivered']},
-        },
-        {$set:{messageStatus:"read"}}
-    )
+    await message.save();
 
-    conversation.unreadCounts = 0;
+    // Update conversation metadata
+    conversation.lastMessage = message._id;
+    conversation.unreadCount += 1;
     await conversation.save();
 
-    return response(res,200,'Messages retrieved',messages);
-    } catch (error) {
-        console.error(error);
-        return response(res,500,'Internal Server Error')
+    // Populate sender and receiver info
+    const populatedMessage = await Message.findById(message._id)
+      .populate("sender", "username profilePicture")
+      .populate("receiver", "username profilePicture");
+
+    // Emit socket event for real-time update
+    if (req.io && req.socketUserMap) {
+      const receiverSocketId = req.socketUserMap.get(receiverId);
+      if (receiverSocketId) {
+        req.io.to(receiverSocketId).emit("receive_message", populatedMessage);
+        message.messageStatus = "delivered";
+        await message.save();
+      }
     }
-}
-const markAsRead = async (req, res) => {
-  const { messageIds } = req.body;
-  const userId = req.user.userid;
+
+    return response(res, 201, "Message send successfully", populatedMessage);
+  } catch (error) {
+    console.error("Error sending message:", error);
+    return response(res, 500, error.message);
+  }
+};
+
+// Get all conversations of logged-in user
+exports.getConversations = async (req, res) => {
+  const userId = req.user.id;
 
   try {
-    // 1. fetch messages (to get sender + conversation)
-    const messages = await Message.find({
-      _id: { $in: messageIds },
-      receiver: userId,
-    }).select("sender conversation");
+    const conversations = await Conversation.find({
+      participants: userId,
+    })
+      .populate("participants", "username profilePicture isOnline lastSeen")
+      .populate({
+        path: "lastMessage",
+        populate: {
+          path: "sender receiver",
+          select: "username profilePicture",
+        },
+      })
+      .sort({ updatedAt: -1 }); // Most recent first
 
-    if (!messages.length) {
-      return response(res, 200, "No messages to mark");
+    return response(res, 200, "Conversations retrieved", conversations);
+  } catch (error) {
+    console.error("Error getting conversations:", error);
+    return response(res, 500, error.message);
+  }
+};
+
+// Get messages of a specific conversation
+exports.getMessages = async (req, res) => {
+  const { conversationId } = req.params;
+  const userId = req.user.id;
+
+  try {
+    // Validate conversation
+    const conversation = await Conversation.findById(conversationId);
+    if (!conversation) {
+      return response(res, 404, "Conversation not found");
     }
 
-    // 2. mark as read
+    // Check access permission
+    if (!conversation.participants.includes(userId)) {
+      return response(res, 403, "Not authorized to view this conversation");
+    }
+
+    // Fetch messages sorted by creation time
+    const messages = await Message.find({ conversation: conversationId })
+      .populate("sender", "username profilePicture")
+      .populate("receiver", "username profilePicture")
+      .sort("createdAt");
+
+    // Mark unread messages as read
+    await Message.updateMany(
+      {
+        conversation: conversationId,
+        receiver: userId,
+        messageStatus: { $in: ["send", "delivered"] },
+      },
+      { $set: { messageStatus: "read" } }
+    );
+
+    // Reset conversation unread count
+    conversation.unreadCount = 0;
+    await conversation.save();
+
+    return response(res, 200, "Messages retrieved", messages);
+  } catch (error) {
+    console.error("Error getting messages:", error);
+    return response(res, 500, error.message);
+  }
+};
+
+// Mark multiple messages as read
+exports.markAsRead = async (req, res) => {
+  const { messageIds } = req.body;
+  const userId = req.user.id;
+
+  try {
+    // Get relevant messages to determine senders
+    let messages = await Message.find({
+      _id: { $in: messageIds },
+      receiver: userId,
+    });
+
+    // Update messageStatus to "read"
     await Message.updateMany(
       { _id: { $in: messageIds }, receiver: userId },
       { $set: { messageStatus: "read" } }
     );
 
-    const conversationId = messages[0].conversation.toString();
-    const senderId = messages[0].sender.toString();
-
-    // 3. notify sender via socket
+    // Notify original senders in real-time
     if (req.io && req.socketUserMap) {
-      const senderSocketId = req.socketUserMap.get(senderId);
-
-      if (senderSocketId) {
-        req.io.to(senderSocketId).emit("message_read", {
-          conversationId,
-          messageIds,
-        });
+      for (const message of messages) {
+        const senderSocketId = req.socketUserMap.get(message.sender.toString());
+        if (senderSocketId) {
+          const updatedMessage = {
+            _id: message._id,
+            messageStatus: "read",
+          };
+          req.io.to(senderSocketId).emit("message_read", updatedMessage);
+          await message.save(); // Optional: update each message
+        }
       }
     }
 
     return response(res, 200, "Messages marked as read");
   } catch (error) {
-    console.error("markAsRead error", error);
-    return response(res, 500, "Internal Server Error");
+    console.error("Error marking messages as read:", error);
+    return response(res, 500, error.message);
   }
 };
 
+// Delete a message (only by sender)
+exports.deleteMessage = async (req, res) => {
+  const { messageId } = req.params;
+  const userId = req.user.id;
 
-const deleteMessages = async(req,res)=> {
-
-    const {messageIds} = req.params;
-    const userId = req.user.userid;
-    try {
-        const messages = await Message.findById(messageIds)
-        if(!messages) {
-            return response(res,404,'No messages not found')
-        }
-        if(messages.sender.toString()!==userId) {
-            return response(res,403,'Not authorized to delete messages')
-        }
-        await messages.deleteOne();
-
-         if(req.io && req.socketUserMap) {
-            const receiverSocketId = req.socketUserMap.get(messages.receiver.toString());
-            if(receiverSocketId) {
-                req.io.to(receiverSocketId).emit("message_deleted",messageIds)
-            }
-         }
-        
-        return response(res,200,'Message deleted successfully')
-    } catch (error) {
-        console.error(error);
-        return response(res,500,'Internal Server Error')
+  try {
+    const message = await Message.findById(messageId);
+    if (!message) {
+      return response(res, 404, "Message not found");
     }
-}
 
-module.exports = {sendMessage,getAllConversations,markAsRead,deleteMessages,getMessages}
+    // Permission check: only sender can delete
+    if (message.sender.toString() !== userId) {
+      return response(res, 403, "Not authorized to delete this message");
+    }
+
+    await message.deleteOne();
+
+    // Notify receiver in real-time via socket
+    if (req.io && req.socketUserMap) {
+      const receiverSocketId = req.socketUserMap.get(
+        message.receiver.toString()
+      );
+      if (receiverSocketId) {
+        req.io.to(receiverSocketId).emit("message_deleted", messageId);
+      }
+    }
+
+    return response(res, 200, "Message deleted successfully");
+  } catch (error) {
+    console.error("Error deleting message:", error);
+    return response(res, 500, error.message);
+  }
+};

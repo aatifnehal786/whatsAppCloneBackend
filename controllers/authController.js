@@ -1,231 +1,206 @@
-
-
-// send Otp
-
 const User = require("../models/User");
-const { sendOtpEmail } = require("../services/emailService");
-const otpGenerator = require("../utils/otpGenerator");
-const response = require('../utils/responseHandler')
-const twilloService = require('../services/twilio');
+const generateOtp = require("../utils/otpGenerator");
 const generateToken = require("../utils/generateToken");
+const response = require("../utils/responseHandler");
+const twilioService = require("../services/twilio");
 const { uploadFileToCloudinary } = require("../config/cloudinaryConfig");
 const Conversation = require("../models/Conversation");
+const sendOtpToEmail = require("../services/emailService");
 
+// Step 1: Send OTP
+const sendOtp = async (req, res) => {
+  const { phoneNumber, phoneSuffix, email } = req.body;
+  const otp = generateOtp();
+  const expiry = new Date(Date.now() + 5 * 60 * 1000);
+  let user;
+  try {
+    if (email) {
+      user = await User.findOne({ email });
 
-const sendOtp = async(req,res)=>{
-    const {phoneNumber,phoneSuffix,email} = req.body;
-    const otp = otpGenerator();
-    const expiry = new Date(Date.now() + 5 * 60 * 1000);
+      if (!user) {
+        user = new User({ email });
+      }
+
+      user.emailOtp = otp;
+      user.emailOtpExpiry = expiry;
+      await user.save();
+      await sendOtpToEmail(email, otp);
+
+      return response(res, 200, "OTP sent to email", { email });
+    }
+        if (!phoneNumber || !phoneSuffix) {
+        return response(res, 400, 'Phone number and phone suffix are required');
+      }
+      const fullPhoneNumber = `${phoneSuffix}${phoneNumber}`;
+    user = await User.findOne({ phoneNumber });
+    if (!user) {
+      user = new User({ phoneNumber, otp, phoneSuffix });
+    } 
+    await twilioService.sendOtp(fullPhoneNumber);
+    await user.save();
+
+    return response(res, 200, "OTP send successfully", user);
+  } catch (error) {
+    console.error(error);
+    return response(res, 500, "Server Error");
+  }
+};
+
+// Step 2: Verify OTP
+const verifyOtp = async (req, res) => {
+  const { phoneNumber, phoneSuffix, email, otp } = req.body;
+  try {
     let user;
-    try {
-        if(email) {
-            user = await User.findOne({email})
 
-            if(!user) {
-                user = new User({email})
-            }
-            user.emailOtp = otp;
-            user.emailOtpExpire = expiry;
-            await user.save();
-            await sendOtpEmail(email,otp);
+    // 🌐 Email verification logic
+    if (email) {
+      user = await User.findOne({ email });
+      if (!user) return response(res, 400, "User not found");
+      const now = new Date();
+      if (
+        !user.emailOtp ||
+         String(user.emailOtp) !== String(otp) ||
+        !user.emailOtpExpiry ||
+        now > new Date(user.emailOtpExpiry)
+      ) {
+        return response(res, 400, "Invalid or expired OTP");
+      }
 
-            return response(res,200,'Otp send to your email',{email});
-        }
-        if(!phoneNumber || !phoneSuffix) {
-            return response(res,400,'Phone number and Phone Suffix is required');
-        }
-
-        const fullPhoneNumber = `${phoneSuffix}${phoneNumber}`;
-        user = await User.findOne({phoneNumber})
-
-        if(!user) {
-            user = await new User ({phoneNumber,phoneSuffix})
-        }
-
-        await twilloService.sendOtpToPhoneNumber(fullPhoneNumber)
-
-        await user.save();
-
-        return response(res,200,'Otp Send Successfully',user);
-
-    } catch (error) {
-        console.error(error)
-        return response(res,500,'Internal Server Error')
-    }
-}
-
-
-// verify otp
-
-
-const verifyOtp = async(req,res)=>{
-
-    const {phoneNumber,phoneSuffix,email,otp} = req.body;
-
-    try {
-        
-        let user;
-        if(email) {
-            user = await User.findOne({email})
-
-            if(!user) {
-                return response(res,404,'User not Found')
-            }
-            const now = new Date();
-
-            if(!user.emailOtp || String(user.emailOtp)!= String(otp) || now > new Date(user.emailOtpExpire)) {
-                return response(res,400,'Invalid or expired otp');
-            }
-            user.isVerified = true;
-            user.emailOtp = null;
-            user.emailOtpExpire = null;
-            await user.save();
-        }
-        else {
-            if(!phoneNumber || !phoneSuffix) {
-            return response(res,400,'Phone number and Phone Suffix is required');
-        }
-
-        const fullPhoneNumber = `${phoneSuffix}${phoneNumber}`;
-        user = await User.findOne({phoneNumber})
-
-        if(!user) {
-                return response(res,404,'User not Found')
-            }
-
-            const result = await twilloService.verifyPhoneNumber(fullPhoneNumber,otp);
-            if(result.status !== 'approved') {
-                return response(res,400,'Invalid Otp');
-            }
-            user.isVerified = true;
-            await user.save();
-        }
-
-        
-        const token = generateToken(user?._id);
-
-        res.cookie("auth_token",token,{
-            httpOnly:true,
-            maxAge: 1000 * 60 * 60 * 24 * 365
-        });
-
-        return response(res,200,'Otp verified successfully',{token,user})
-    } catch (error) {
-        console.error(error)
-        return response(res,500,'Internal Server Error')
+      user.isVerified = true;
+      user.emailOtp = null;
+      user.emailOtpExpiry = null;
+      await user.save();
     }
 
-}
+    // 📞 Phone verification logic
+    else {
+      if (!phoneNumber || !phoneSuffix) {
+        return response(res, 400, "Phone number and suffix are required");
+      }
 
+      const fullPhoneNumber = `${phoneSuffix}${phoneNumber}`;
+      user = await User.findOne({ phoneNumber });
+      if (!user) return response(res, 400, "User not found");
 
-// Update profile
-const updateProfile = async (req, res) => {
-    const { userName, agreed, about } = req.body;
-    const userId = req.user.userid;
+      const result = await twilioService.verifyOtp(fullPhoneNumber, otp);
+      if (result.status !== "approved") {
+        return response(res, 400, "Invalid OTP");
+      }
 
-    try {
-        const user = await User.findById(userId);
-        if (!user) {
-            return response(res, 404, "User not found");
-        }
-
-        // profile picture
-        if (req.file) {
-            const uploadResult = await uploadFileToCloudinary(req.file);
-            user.profilePicture = uploadResult.secure_url;
-        } else if (req.body.profilePicture) {
-            user.profilePicture = req.body.profilePicture;
-        }
-
-        // username
-        if (userName) {
-            user.userName = userName;
-        }
-
-        // agreed (boolean-safe)
-        if (typeof agreed !== "undefined") {
-            user.agreed = agreed;
-        }
-
-        // about
-        if (about) {
-            user.about = about;
-        }
-
-        await user.save();
-
-        return response(res, 200, "Profile updated successfully", user);
-    } catch (error) {
-        console.error(error);
-        return response(res, 500, "Internal Server Error");
+      user.isVerified = true;
+      await user.save();
     }
+
+    // ✅ Token and cookie logic (common)
+    const token = generateToken(user._id);
+    res.cookie("auth_token",token, {
+      httpOnly:true,
+      maxAge:1000 * 60 * 60 * 24 * 365
+    })
+
+    return response(res, 200, "OTP verified successfully", { token, user });
+  } catch (error) {
+    console.error("Error verifying OTP:", error);
+    return response(res, 500, "Server Error");
+  }
 };
 
 
+// Step 3: Update Username and Profile Picture
+const updateProfile = async (req, res) => {
+  const { username, agreed, about } = req.body;
+  const userId = req.user.id; // userId from JWT
 
-// check if user is authorized or not
-
-const checkUserAuthentication = async(req,res)=>{
-    const userId = req.user.userid;
-
-   try {
-     if(!userId) {
-        return response(res,404,'User is not authorized')
-    }
-
+  try {
     const user = await User.findById(userId);
-    if(!user) {
-        return response(res,404,'User not found')
+    const file = req.file;
+
+    if (file) {
+      const uploadResult = await uploadFileToCloudinary(file);
+      user.profilePicture = uploadResult?.secure_url;
+    } else if (req.body.profilePicture) {
+      user.profilePicture = req.body.profilePicture;
     }
+    if (username) user.username = username;
+    if (agreed) user.agreed = agreed;
+    if (about) user.about = about;
+    await user.save();
 
-    return response(res,200,'User retrived successfully and allowed to use whatsapp',user);
+    return response(res, 200, "Profile updated", user);
+  } catch (error) {
+    return response(res, 500, "Server Error");
+  }
+};
 
-   } catch (error) {
+const checkAuthenticated = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    if (!userId)
+      return response(
+        res,
+        404,
+        "unauthenticated ! please login before access the data"
+      );
+    const user = await User.findById(userId);
+
+    if (!user) return response(res, 403, "User not found");
+
+    return response(res, 201, "user retrived and allow to use facebook", user);
+  } catch (error) {
+    return response(res, 500, "Internal server error", error.message);
+  }
+};
+
+const logout = (req, res) => {
+  try {
+    res.cookie("auth_token", "", { expires: new Date(0) });
+    return response(res, 200, "User logged out successfully");
+  } catch (error) {
     console.error(error);
-    return response(res,500,'Internal Server Error')
-   }
-}
+    return response(res, 500, "Internal Server Error", error.message);
+  }
+};
 
-// get all users except the logged in user
+const getAllUsers = async (req, res) => {
+  const loggedInUserId = req.user.id;
+  try {
+    // Fetch all users excluding the logged-in user
+    const users = await User.find({ _id: { $ne: loggedInUserId } })
+      .select(
+        "username profilePicture lastSeen isOnline phoneSuffix phoneNumber about"
+      )
+      .lean();
 
-const getAllUsersExceptLoggedInUser = async(req,res)=>{
-    const loggedInUser = req.user.userid;
-    try {
-        const allUsers = await User.find({_id:{$ne:loggedInUser}})
-        .select("userName profilePicture about isOnline lastSeen phoneNumber phoneSuffix").lean();
+    // Retrieve conversations involving both the logged-in user and each other user
+    const usersWithConversations = await Promise.all(
+      users.map(async (user) => {
+        const conversation = await Conversation.findOne({
+          participants: { $all: [loggedInUserId, user._id] },
+        })
+          .populate({
+            path: "lastMessage",
+            select: "content createdAt sender receiver",
+          }) // Populate last message details
+          .lean();
 
-        const userWithConversation = await Promise.all(
-            allUsers.map(async(user)=>{
-                const conversation = await Conversation.findOne(
-                    {participants:{$all:[loggedInUser,user?._id]}
-                }).populate({
-                    path:"lastMessage",
-                    select:"content sender receiver createdAt"
-                }).lean();
-                return {
-                    ...user,
-                    conversation : conversation || null
-                }
-            })
-        )
+        return {
+          ...user,
+          conversation: conversation || null,
+        };
+      })
+    );
 
-        return response(res,200,'User retrived successfully',userWithConversation)
-    } catch (error) {
-    console.error(error);
-    return response(res,500,'Internal Server Error')
-    }
-}
+    response(res, 200, "Users retrieved successfully", usersWithConversations);
+  } catch (error) {
+    response(res, 500, error.message);
+  }
+};
 
-// logout
-
-const logout = (req,res)=> {
-    try {
-        res.cookie("auth_token","",{expires:new Date(0)})
-        return response(res,200,'User Logout Successfully')
-    } catch (error) {
-        console.error(error);
-        return response(res,500,'Internal Server Error')
-    }
-}
-
-module.exports = {sendOtp,verifyOtp,updateProfile,logout,checkUserAuthentication,getAllUsersExceptLoggedInUser}
+module.exports = {
+  sendOtp,
+  verifyOtp,
+  updateProfile,
+  checkAuthenticated,
+  getAllUsers,
+  logout,
+};

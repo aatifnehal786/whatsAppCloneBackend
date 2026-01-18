@@ -1,174 +1,166 @@
-const { uploadFileToCloudinary } = require('../config/cloudinaryConfig');
-const Status = require('../models/Status')
+const Status = require("../models/Status")
+const { uploadFileToCloudinary } = require("../config/cloudinaryConfig")
+const response = require("../utils/responseHandler")
 
-const response = require('../utils/responseHandler')
+exports.createStatus = async (req, res) => {
+  const { content, contentType } = req.body
+  const userId = req.user.id
+  const file = req.file
 
 
-const createStatus = async (req, res) => {
-    try {
-        const { content, contentType } = req.body;
-        const userId = req.user.userid;
-        const file = req.file;
+  try {
+    let mediaUrl = null
+    let finalContentType = contentType || "text"
 
-        let mediaUrl = null;
-        let finalContentType = contentType || 'text';
+    if (file) {
+      const uploadedFile = await uploadFileToCloudinary(file)
+      if (!uploadedFile?.secure_url) {
+        return response(res, 400, "Failed to upload media")
+      }
+      mediaUrl = uploadedFile.secure_url
 
-        // handle file upload
-        if (file) {
-            const uploadFile = await uploadFileToCloudinary(file);
+      if (file.mimetype.startsWith("image")) {
+        finalContentType = "image"
+      } else if (file.mimetype.startsWith("video")) {
+        finalContentType = "video"
+      }
+    }
 
-            if (!uploadFile?.secure_url) {
-                return response(res, 400, 'Failed to upload media')
-            }
+    // Set expiration to 24 hours from now
+    const expiresAt = new Date()
+    expiresAt.setHours(expiresAt.getHours() + 24)
 
-            mediaUrl = uploadFile?.secure_url;
-            if (file.mimetype.startswith('image')) {
-                finalContentType = "image"
-            } else if (file.mimetype.startswith('video')) {
-                finalContentType = "video"
-            } else {
-                return response(res, 400, 'Unsupported type')
-            }
-        } else if (content?.trim()) {
-            finalContentType = "text"
+    const status = new Status({
+      user: userId,
+      content: mediaUrl || content,
+      contentType: finalContentType,
+      expiresAt,
+    })
+
+    await status.save()
+
+    const populatedStatus = await Status.findById(status._id)
+      .populate("user", "username profilePicture")
+      .populate("viewers", "username profilePicture")
+
+
+    // ✅ EMIT SOCKET EVENT
+    if (req.io && req.socketUserMap) {
+      // Broadcast to all connected users except the creator
+      for (const [connectedUserId, socketId] of req.socketUserMap) {
+        if (connectedUserId !== userId) {
+          req.io.to(socketId).emit("new_status", populatedStatus)
+        }
+      }
+      
+    } 
+
+    return response(res, 201, "Status created successfully", populatedStatus)
+  } catch (error) {
+    console.error("Error creating status:", error)
+    return response(res, 500, error.message)
+  }
+}
+
+exports.getStatuses = async (req, res) => {
+  try {
+    const statuses = await Status.find({
+      expiresAt: { $gt: new Date() },
+    })
+      .populate("user", "username profilePicture")
+      .populate("viewers", "username profilePicture")
+      .sort({ createdAt: -1 })
+
+    return response(res, 200, "Statuses retrieved successfully", statuses)
+  } catch (error) {
+    console.error("Error getting statuses:", error)
+    return response(res, 500, error.message)
+  }
+}
+
+exports.viewStatus = async (req, res) => {
+  const { statusId } = req.params
+  const userId = req.user.id
+
+  try {
+    const status = await Status.findById(statusId)
+    if (!status) {
+      return response(res, 404, "Status not found")
+    }
+
+    // Add viewer if not already viewed
+    if (!status.viewers.includes(userId)) {
+      status.viewers.push(userId)
+      await status.save()
+
+      console.log('Added new viewer, total viewers now:', status.viewers.length)
+
+      // Get updated status with populated data
+      const updatedStatus = await Status.findById(statusId)
+        .populate("user", "username profilePicture")
+        .populate("viewers", "username profilePicture")
+
+      // ✅ EMIT SOCKET EVENT
+      if (req.io && req.socketUserMap) {
+        const statusOwnerSocketId = req.socketUserMap.get(status.user._id.toString())
+        
+        if (statusOwnerSocketId) {
+          const viewData = {
+            statusId,
+            viewerId: userId,
+            totalViewers: updatedStatus.viewers.length,
+            viewers: updatedStatus.viewers,
+          }
+          
+          console.log('Emitting status_viewed to owner:', viewData)
+          req.io.to(statusOwnerSocketId).emit("status_viewed", viewData)
         } else {
-            return response(res, 400, 'Message Content is required')
+          console.log('Status owner not connected')
         }
-
-        const expiresAt = new Date()
-        expiresAt.setHours(expiresAt.getHours() + 24);
-
-
-        const status = new Status({
-            user: userId,
-            content: mediaUrl || content,
-            contentType: finalContentType,
-            expiresAt: expiresAt
-
-        })
-
-        await status.save();
-
-
-
-        const populateStatus = await Status.findOne(status?._id)
-            .populate("user", "userName profilePicture ")
-            .populate("viewers", "userName profilePicture ")
-
-        // emit socket
-        if (req.io && req.socketUserMap) {
-            // Broadcast to all users except the user
-            for (const [connectedUserId, socketId] of socketUserMap) {
-                if (connectedUserId !== userId) {
-                    req.io.to(socketId).emit("new_status", populateStatus)
-                }
-            }
-        }
-
-        return response(res, 201, "Status Updated Successfully", populateStatus);
-    } catch (error) {
-        console.error(error);
-        return response(res, 500, 'Internal Server Error')
+      } 
+    } else {
+      console.log('User already viewed this status')
     }
+
+    return response(res, 200, "Status viewed")
+  } catch (error) {
+    console.error("Error viewing status:", error)
+    return response(res, 500, error.message)
+  }
 }
 
-
-const getStatuses = async (req, res) => {
-    try {
-        const statuses = await Status.find({
-            expiresAt: { $gt: new Date() }
-        }).populate("user", "userName profilePicture ")
-            .populate("viewers", "userName profilePicture ").sort({ createdAt: -1 });
+exports.deleteStatus = async (req, res) => {
+  const { statusId } = req.params
+  const userId = req.user.id
 
 
-        return response(res, 200, "Statuses Retrieved Successfully", statuses)
-    } catch (error) {
-        console.error(error);
-        return response(res, 500, 'Internal Server Error')
+  try {
+    const status = await Status.findById(statusId)
+    if (!status) {
+      return response(res, 404, "Status not found")
     }
-}
 
-
-const viewStatus = async (req, res) => {
-
-    const { statusId } = req.params;
-    console.log(statusId);
-    const userId = req.user.userid;
-    try {
-        const status = await Status.findById(statusId);
-        console.log(status)
-        if (!status) {
-            return response(res, 404, "status not found")
-        }
-        if (!status.viewers.includes(userId)) {
-            status.viewers.push(userId);
-            await status.save();
-
-
-            const updatedStatus = await Status.findById(statusId)
-                .populate("user", "userName profilePicture ")
-                .populate("viewers", "userName profilePicture ")
-
-
-            // emit socket
-
-            if (req.io && req.socketUserMap) {
-                const statusOwnerSocketId = req.socketUserMap.get(status.user._id.toString());
-                if (statusOwnerSocketId) {
-                    const viewData = {
-                        statusId,
-                        viewerId: userId,
-                        totalViewers: status.viewers.length,
-                        viewers: updatedStatus.viewers
-                    }
-                    req.io.to(statusOwnerSocketId).emit("status_viewed", viewData)
-                } else {
-                    console.log("status owner are not connected")
-                }
-            }
-        } else {
-            console.log("user already viewed status")
-        }
-
-        return response(res, 200, "status viewed successfully");
-    } catch (error) {
-        console.error(error);
-        return response(res, 500, 'Internal Server Error')
+    if (status.user.toString() !== userId) {
+      return response(res, 403, "Not authorized to delete this status")
     }
+
+    await status.deleteOne()
+    console.log('Status deleted from database')
+
+    // ✅ EMIT SOCKET EVENT
+    if (req.io && req.socketUserMap) {
+      // Broadcast to all connected users except the deleter
+      for (const [connectedUserId, socketId] of req.socketUserMap) {
+        if (connectedUserId !== userId) {
+          req.io.to(socketId).emit("status_deleted", statusId)
+        }
+      }
+      
+      console.log(`Emitted status_deleted to ${emittedCount} users`)
+    } 
+    return response(res, 200, "Status deleted successfully")
+  } catch (error) {
+    console.error("Error deleting status:", error)
+    return response(res, 500, error.message)
+  }
 }
-
-
-const deleteStatus = async (req, res) => {
-    const { statusId } = req.params;
-    const userId = req.user.userid;
-
-    try {
-        const status = await Status.findById(statusId);
-        if (!status) {
-            return response(res, 404, "status not found")
-        }
-        if (status.user.toString() !== userId) {
-            return response(res, 403, 'Not authorized to delete status')
-        }
-
-        await status.deleteOne();
-
-        // emit socket
-        if (req.io && req.socketUserMap) {
-            // Broadcast to all users except the user
-            for (const [connectedUserId, socketId] of socketUserMap) {
-                if (connectedUserId !== userId) {
-                    req.io.to(socketId).emit("status_deleted", statusId)
-                }
-            }
-        }
-
-        return response(res, 200, "Status deleted successfully")
-    } catch (error) {
-        console.error(error);
-        return response(res, 500, 'Internal Server Error')
-    }
-}
-
-
-module.exports = { createStatus, viewStatus, getStatuses, deleteStatus }
