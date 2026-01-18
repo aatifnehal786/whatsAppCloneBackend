@@ -36,7 +36,7 @@ const sendOtp = async (req, res) => {
     if (!user) {
       user = new User({ phoneNumber, otp, phoneSuffix });
     } 
-    await twilioService.sendOtp(fullPhoneNumber);
+    await twilioService.sendOtpToPhoneNumber(fullPhoneNumber);
     await user.save();
 
     return response(res, 200, "OTP send successfully", user);
@@ -82,7 +82,7 @@ const verifyOtp = async (req, res) => {
       user = await User.findOne({ phoneNumber });
       if (!user) return response(res, 400, "User not found");
 
-      const result = await twilioService.verifyOtp(fullPhoneNumber, otp);
+      const result = await twilioService.verifyPhoneNumber(fullPhoneNumber, otp);
       if (result.status !== "approved") {
         return response(res, 400, "Invalid OTP");
       }
@@ -107,34 +107,54 @@ const verifyOtp = async (req, res) => {
 
 
 // Step 3: Update Username and Profile Picture
+// Step 3: Update Username and Profile Picture
 const updateProfile = async (req, res) => {
-  const { username, agreed, about } = req.body;
-  const userId = req.user.id; // userId from JWT
-
   try {
-    const user = await User.findById(userId);
-    const file = req.file;
+    const { username, agreed, about, profilePicture } = req.body;
 
-    if (file) {
-      const uploadResult = await uploadFileToCloudinary(file);
-      user.profilePicture = uploadResult?.secure_url;
-    } else if (req.body.profilePicture) {
-      user.profilePicture = req.body.profilePicture;
+    // ✅ FIX 1: correct user id
+    const userId = req.user.userid || req.user._id;
+
+    const user = await User.findById(userId);
+
+    // ✅ FIX 2: user guard
+    if (!user) {
+      return response(res, 404, "User not found");
     }
+
+    // ✅ handle file upload
+    if (req.file) {
+      const uploadResult = await uploadFileToCloudinary(req.file);
+      user.profilePicture = uploadResult?.secure_url;
+    } 
+    // ✅ handle avatar URL
+    else if (profilePicture) {
+      user.profilePicture = profilePicture;
+    }
+
     if (username) user.username = username;
-    if (agreed) user.agreed = agreed;
+
+    // ✅ FIX 3: boolean conversion
+    if (agreed !== undefined) {
+      user.agreed = agreed === "true" || agreed === true;
+    }
+
     if (about) user.about = about;
+
     await user.save();
 
     return response(res, 200, "Profile updated", user);
+
   } catch (error) {
+    console.error("Update profile error:", error);
     return response(res, 500, "Server Error");
   }
 };
 
+
 const checkAuthenticated = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userid;
     if (!userId)
       return response(
         res,
