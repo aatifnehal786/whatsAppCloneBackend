@@ -182,7 +182,7 @@ const logout = (req, res) => {
 };
 
 const getAllUsers = async (req, res) => {
-  const loggedInUserId = req.user.id;
+  const loggedInUserId = req.user.userid;
   try {
     // Fetch all users excluding the logged-in user
     const users = await User.find({ _id: { $ne: loggedInUserId } })
