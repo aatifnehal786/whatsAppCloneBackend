@@ -165,7 +165,7 @@ const checkAuthenticated = async (req, res) => {
     }
 
     const user = await User.findById(userId)
-      .select("-password -__v");
+      
 
     if (!user) {
       return response(res, 404, "User not found");
