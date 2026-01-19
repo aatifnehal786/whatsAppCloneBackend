@@ -12,7 +12,7 @@ const app = express();
 
 // Configure CORS
 const corsOptions = {
-    origin: "*",
+    origin: "https://pingmeweb.netlify.app",
     credentials:true
 };
 app.use(cors(corsOptions));
