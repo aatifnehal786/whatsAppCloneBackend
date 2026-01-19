@@ -13,7 +13,7 @@ const typingUsers = new Map();
 const initializeSocket = (server) => {
   const io = new Server(server, {
     cors: {
-      origin: process.env.FRONTEND_URL,
+      origin: "https://pingmeweb.netlify.app",
       credentials: true,
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     },
