@@ -154,22 +154,34 @@ const updateProfile = async (req, res) => {
 
 const checkAuthenticated = async (req, res) => {
   try {
-    const userId = req.user.userid;
-    if (!userId)
+    const userId = req.user?.userid;
+
+    if (!userId) {
       return response(
         res,
-        404,
-        "unauthenticated ! please login before access the data"
+        401,
+        "Unauthenticated! Please login before accessing this resource"
       );
-    const user = await User.findById(userId);
+    }
 
-    if (!user) return response(res, 403, "User not found");
+    const user = await User.findById(userId)
+      .select("-password -__v");
 
-    return response(res, 201, "user retrived and allow to use facebook", user);
+    if (!user) {
+      return response(res, 404, "User not found");
+    }
+
+    return response(
+      res,
+      200,
+      "User authenticated",
+      user
+    );
   } catch (error) {
     return response(res, 500, "Internal server error", error.message);
   }
 };
+
 
 const logout = (req, res) => {
   try {
