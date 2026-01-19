@@ -5,7 +5,7 @@ const response = require("../utils/responseHandler");
 const twilioService = require("../services/twilio");
 const { uploadFileToCloudinary } = require("../config/cloudinaryConfig");
 const Conversation = require("../models/Conversation");
-const sendOtpToEmail = require("../services/emailService");
+const {sendOtpEmail} = require("../services/emailService");
 
 // Step 1: Send OTP
 const sendOtp = async (req, res) => {
@@ -24,7 +24,7 @@ const sendOtp = async (req, res) => {
       user.emailOtp = otp;
       user.emailOtpExpiry = expiry;
       await user.save();
-      await sendOtpToEmail(email, otp);
+      await sendOtpEmail(email, otp);
 
       return response(res, 200, "OTP sent to email", { email });
     }

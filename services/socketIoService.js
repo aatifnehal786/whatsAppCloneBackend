@@ -17,6 +17,7 @@ const initializeSocket = (server) => {
       credentials: true,
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     },
+    transports: ["websocket", "polling"],
     pingTimeout: 60000, // Disconnect inactive sockets after 60s
   });
 

@@ -5,96 +5,74 @@ const response = require("../utils/responseHandler");
 
 // Send a message (text/image/video)
 exports.sendMessage = async (req, res) => {
-  const { senderId, receiverId, content, messageStatus } = req.body;
-  const file = req.file;
   try {
-    // Sort participants to maintain consistent conversation key
+    const { senderId, receiverId, content } = req.body;
+    const file = req.file;
+
     const participants = [senderId, receiverId].sort();
 
-    
-    // Check if conversation already exits
-    let conversation = await Conversation.findOne({
-      participants: participants,
-    });
+    let conversation = await Conversation.findOne({ participants });
 
-    // Create new conversation if not found
     if (!conversation) {
-      conversation = new Conversation({
+      conversation = await Conversation.create({
         participants,
         unreadCount: 0,
       });
-      await conversation.save();
     }
 
     let imageOrVideoUrl = null;
-    let contentType = null;
+    let contentType = "text";
 
-    // Handle file upload (image or video)
     if (file) {
-      const uploadedFile = await uploadFileToCloudinary(file);
-
-      if (!uploadedFile?.secure_url) {
-        return response(res, 400, "Failed to upload media");
-      }
-
-      imageOrVideoUrl = uploadedFile.secure_url;
-
-      if (file.mimetype.startsWith("image")) {
-        contentType = "image";
-      } else if (file.mimetype.startsWith("video")) {
-        contentType = "video";
-      } else {
-        return response(res, 400, "Unsupported file type");
-      }
-    } else if (content?.trim()) {
-      contentType = "text";
-    } else {
-      return response(res, 400, "Message content is required");
+      const uploaded = await uploadFileToCloudinary(file);
+      imageOrVideoUrl = uploaded.secure_url;
+      contentType = file.mimetype.startsWith("image") ? "image" : "video";
     }
 
-    // Save message to DB
-    const message = new Message({
+    const message = await Message.create({
       conversation: conversation._id,
       sender: senderId,
       receiver: receiverId,
       content,
       imageOrVideoUrl,
       contentType,
-      messageStatus,
+      messageStatus: "sent",
     });
 
-    await message.save();
-
-    // Update conversation metadata
     conversation.lastMessage = message._id;
-    conversation.unreadCount += 1;
+    conversation.unreadCount = (conversation.unreadCount || 0) + 1;
     await conversation.save();
 
-    // Populate sender and receiver info
+    const receiverSocketId = req.socketUserMap?.get(receiverId);
+    const senderSocketId = req.socketUserMap?.get(senderId);
+
+    if (receiverSocketId) {
+      message.messageStatus = "delivered";
+      await message.save();
+    }
+
     const populatedMessage = await Message.findById(message._id)
       .populate("sender", "username profilePicture")
       .populate("receiver", "username profilePicture");
 
-    // Emit socket event for real-time update
-    if (req.io && req.socketUserMap) {
-      const receiverSocketId = req.socketUserMap.get(receiverId);
-      if (receiverSocketId) {
-        req.io.to(receiverSocketId).emit("receive_message", populatedMessage);
-        message.messageStatus = "delivered";
-        await message.save();
-      }
+    if (receiverSocketId) {
+      req.io.to(receiverSocketId).emit("receive_message", populatedMessage);
+    }
+    if (senderSocketId) {
+      req.io.to(senderSocketId).emit("receive_message", populatedMessage);
     }
 
     return response(res, 201, "Message send successfully", populatedMessage);
-  } catch (error) {
-    console.error("Error sending message:", error);
-    return response(res, 500, error.message);
+  } catch (err) {
+    console.error(err);
+    return response(res, 500, err.message);
   }
 };
 
+
 // Get all conversations of logged-in user
 exports.getConversations = async (req, res) => {
-  const userId = req.user.id;
+  const userId = req.user.userid;
 
   try {
     const conversations = await Conversation.find({
@@ -118,43 +96,52 @@ exports.getConversations = async (req, res) => {
 };
 
 // Get messages of a specific conversation
+
 exports.getMessages = async (req, res) => {
   const { conversationId } = req.params;
-  const userId = req.user.id;
+  const userId = req.user.userid;
+  console.log(userId)
 
   try {
-    // Validate conversation
+    // 1️⃣ Validate conversation
     const conversation = await Conversation.findById(conversationId);
     if (!conversation) {
       return response(res, 404, "Conversation not found");
     }
 
-    // Check access permission
+    // 2️⃣ Check access permission
     if (!conversation.participants.includes(userId)) {
       return response(res, 403, "Not authorized to view this conversation");
     }
 
-    // Fetch messages sorted by creation time
+    // 3️⃣ Fetch messages in chronological order (oldest first)
     const messages = await Message.find({ conversation: conversationId })
       .populate("sender", "username profilePicture")
       .populate("receiver", "username profilePicture")
-      .sort("createdAt");
+      .sort({ createdAt: 1 }); // 1 = ascending, -1 = descending
 
-    // Mark unread messages as read
-    await Message.updateMany(
-      {
-        conversation: conversationId,
-        receiver: userId,
-        messageStatus: { $in: ["send", "delivered"] },
-      },
-      { $set: { messageStatus: "read" } }
-    );
+    // 4️⃣ Mark unread messages as read for current user
+    const unreadMessageIds = messages
+      .filter(
+        (msg) =>
+          msg.receiver._id.toString() === userId.toString() &&
+          ["send", "delivered"].includes(msg.messageStatus)
+      )
+      .map((msg) => msg._id);
 
-    // Reset conversation unread count
-    conversation.unreadCount = 0;
-    await conversation.save();
+    if (unreadMessageIds.length > 0) {
+      await Message.updateMany(
+        { _id: { $in: unreadMessageIds } },
+        { $set: { messageStatus: "read" } }
+      );
 
-    return response(res, 200, "Messages retrieved", messages);
+      // Reset conversation unread count
+      conversation.unreadCount = 0;
+      await conversation.save();
+    }
+
+    // 5️⃣ Return messages
+    return response(res, 200, "Messages retrieved successfully", messages);
   } catch (error) {
     console.error("Error getting messages:", error);
     return response(res, 500, error.message);
@@ -164,7 +151,7 @@ exports.getMessages = async (req, res) => {
 // Mark multiple messages as read
 exports.markAsRead = async (req, res) => {
   const { messageIds } = req.body;
-  const userId = req.user.id;
+  const userId = req.user.userid;
 
   try {
     // Get relevant messages to determine senders
@@ -204,7 +191,7 @@ exports.markAsRead = async (req, res) => {
 // Delete a message (only by sender)
 exports.deleteMessage = async (req, res) => {
   const { messageId } = req.params;
-  const userId = req.user.id;
+  const userId = req.user.userid;
 
   try {
     const message = await Message.findById(messageId);
