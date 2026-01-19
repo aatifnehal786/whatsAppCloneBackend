@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const response = require('../utils/responseHandler');
 
 const authMiddleware = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
+  
   const authToken = req.cookies?.auth_token;
   if (!authToken) {
     return response(res, 401, 'Authorization token missing or malformed');
