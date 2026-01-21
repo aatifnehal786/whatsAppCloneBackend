@@ -189,13 +189,20 @@ const checkAuthenticated = async (req, res) => {
 
 const logout = (req, res) => {
   try {
-    res.cookie("auth_token", "", { expires: new Date(0) });
+    res.clearCookie("auth_token", {
+      httpOnly: true,
+      secure: true,       // MUST match login
+      sameSite: "None",   // MUST match login
+      path: "/",          // IMPORTANT
+    });
+
     return response(res, 200, "User logged out successfully");
   } catch (error) {
     console.error(error);
     return response(res, 500, "Internal Server Error", error.message);
   }
 };
+
 
 const getAllUsers = async (req, res) => {
   const loggedInUserId = req.user.userid;
