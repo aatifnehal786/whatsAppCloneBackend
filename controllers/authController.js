@@ -117,7 +117,7 @@ const updateProfile = async (req, res) => {
     const { username, agreed, about, profilePicture } = req.body;
 
     // ✅ FIX 1: correct user id
-    const userId = req.user.userid || req.user._id;
+    const userId = req.user.userid;
 
     const user = await User.findById(userId);
 

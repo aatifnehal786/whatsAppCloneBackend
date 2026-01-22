@@ -4,7 +4,7 @@ const response = require("../utils/responseHandler")
 
 exports.createStatus = async (req, res) => {
   const { content, contentType } = req.body
-  const userId = req.user.id
+  const userId = req.user.userid 
   const file = req.file
 
 
@@ -80,7 +80,7 @@ exports.getStatuses = async (req, res) => {
 
 exports.viewStatus = async (req, res) => {
   const { statusId } = req.params
-  const userId = req.user.id
+  const userId = req.user.userid 
 
   try {
     const status = await Status.findById(statusId)
@@ -131,7 +131,7 @@ exports.viewStatus = async (req, res) => {
 
 exports.deleteStatus = async (req, res) => {
   const { statusId } = req.params
-  const userId = req.user.id
+  const userId = req.user.userid 
 
 
   try {
