@@ -17,9 +17,7 @@ const sendOtp = async (req, res) => {
     if (email) {
       user = await User.findOne({ email });
 
-      if (!user) {
-        user = new User({ email });
-      }
+     
 
       user.emailOtp = otp;
       user.emailOtpExpiry = expiry;
@@ -33,9 +31,6 @@ const sendOtp = async (req, res) => {
       }
       const fullPhoneNumber = `${phoneSuffix}${phoneNumber}`;
     user = await User.findOne({ phoneNumber });
-    if (!user) {
-      user = new User({ phoneNumber, otp, phoneSuffix });
-    } 
     await twilioService.sendOtpToPhoneNumber(fullPhoneNumber);
     await user.save();
 
@@ -94,12 +89,12 @@ const verifyOtp = async (req, res) => {
     // ✅ Token and cookie logic (common)
     const token = generateToken(user._id);
     res.cookie("auth_token", token, {
-  httpOnly: true,
-  secure: true,       // 🔴 REQUIRED for sameSite: none
-  sameSite: "none",   // 🔴 REQUIRED for cross-site
-  path: "/",          // 🔴 REQUIRED
-  maxAge: 1000 * 60 * 60 * 24 * 365,
-});
+      httpOnly: true,
+      secure: true,       // 🔴 REQUIRED for sameSite: none
+      sameSite: "none",   // 🔴 REQUIRED for cross-site
+      path: "/",          // 🔴 REQUIRED
+      maxAge: 1000 * 60 * 60 * 24 * 365,
+    });
 
 
     return response(res, 200, "OTP verified successfully", { token, user });
