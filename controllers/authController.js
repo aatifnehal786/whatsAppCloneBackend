@@ -1,5 +1,5 @@
 const User = require("../models/User");
-const generateOtp = require("../utils/otpGenerator");
+// const generateOtp = require("../utils/otpGenerator");
 const generateToken = require("../utils/generateToken");
 const response = require("../utils/responseHandler");
 const twilioService = require("../services/twilio");
@@ -8,16 +8,23 @@ const Conversation = require("../models/Conversation");
 const {sendOtpEmail} = require("../services/emailService");
 
 // Step 1: Send OTP
+const generateOtp = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
 const sendOtp = async (req, res) => {
   const { phoneNumber, phoneSuffix, email } = req.body;
   const otp = generateOtp();
   const expiry = new Date(Date.now() + 5 * 60 * 1000);
-  let user;
+  
   try {
     if (email) {
-      user = await User.findOne({ email });
-
-     
+      let user = await User.findOne({ email });
+      
+      // If user not found, create new
+      if (!user) {
+        user = new User({ email });
+      }
 
       user.emailOtp = otp;
       user.emailOtpExpiry = expiry;
@@ -26,21 +33,32 @@ const sendOtp = async (req, res) => {
 
       return response(res, 200, "OTP sent to email", { email });
     }
-        if (!phoneNumber || !phoneSuffix) {
-        return response(res, 400, 'Phone number and phone suffix are required');
-      }
-      const fullPhoneNumber = `${phoneSuffix}${phoneNumber}`;
-    user = await User.findOne({ phoneNumber });
-    await twilioService.sendOtpToPhoneNumber(fullPhoneNumber);
+
+    if (!phoneNumber || !phoneSuffix) {
+      return response(res, 400, 'Phone number and phone suffix are required');
+    }
+
+    const fullPhoneNumber = `${phoneSuffix}${phoneNumber}`;
+    let user = await User.findOne({ phoneNumber: fullPhoneNumber });
+    
+    if (!user) {
+      user = new User({ phoneNumber: fullPhoneNumber });
+    }
+
+    // Save OTP for phone too
+    user.phoneOtp = otp;
+    user.phoneOtpExpiry = expiry;
     await user.save();
 
-    return response(res, 200, "OTP send successfully", user);
+    await twilioService.sendOtpToPhoneNumber(fullPhoneNumber, otp); // Pass otp to twilio
+
+    return response(res, 200, "OTP sent successfully", { phoneNumber: fullPhoneNumber });
+
   } catch (error) {
     console.error(error);
     return response(res, 500, "Server Error");
   }
 };
-
 // Step 2: Verify OTP
 const verifyOtp = async (req, res) => {
   const { phoneNumber, phoneSuffix, email, otp } = req.body;
